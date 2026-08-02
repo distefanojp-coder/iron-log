@@ -1,0 +1,330 @@
+import { useState, useEffect } from "react";
+import { fetchWorkouts, saveWorkout } from "./api";
+
+// ─── constants ────────────────────────────────────────────────────────────────
+const MUSCLE_GROUPS = [
+  "Chest","Back","Shoulders","Biceps","Triceps","Legs","Core","Full Body","Cardio",
+];
+const UNITS = ["lbs","kg","bodyweight","minutes","meters"];
+
+// ─── Phase 1 plan — short version ────────────────────────────────────────────
+const PREHAB = [
+  { name: "Band pull-aparts",      sets: 2, target: "15", unit: "bodyweight" },
+  { name: "Face pulls (band)",      sets: 2, target: "15", unit: "bodyweight" },
+];
+
+const PHASE1 = {
+  name: "Phase 1 — Return to Training",
+  subtitle: "20–25 min · Push / Pull · A/B Split",
+  note: "Prehab warm-up is mandatory every session — shoulder health before any pressing or pulling.",
+  days: [
+    {
+      id: "A", label: "Day A", focus: "Push + Core",
+      muscles: ["Chest","Shoulders","Core"],
+      core: {
+        early: [
+          { name: "Plank hold",  sets: 3, target: "20", unit: "bodyweight", note: "20 sec" },
+          { name: "Dead bug",    sets: 2, target: "8",  unit: "bodyweight", note: "each side" },
+        ],
+        late: [
+          { name: "Plank hold",  sets: 3, target: "30", unit: "bodyweight", note: "30 sec" },
+          { name: "Dead bug",    sets: 2, target: "10", unit: "bodyweight", note: "each side" },
+        ],
+      },
+      main: {
+        early: [
+          { name: "Flat barbell bench press", sets: 3, target: "8",  unit: "lbs" },
+          { name: "Seated barbell OHP",        sets: 3, target: "8",  unit: "lbs" },
+          { name: "Glute bridge",              sets: 3, target: "15", unit: "bodyweight", note: "slow and controlled" },
+        ],
+        late: [
+          { name: "Flat barbell bench press", sets: 3, target: "8",  unit: "lbs" },
+          { name: "Seated barbell OHP",        sets: 3, target: "8",  unit: "lbs" },
+          { name: "Glute bridge",              sets: 3, target: "15", unit: "lbs", note: "add weight when 15 feels easy" },
+        ],
+      },
+      accessories: { early: [], late: [] },
+    },
+    {
+      id: "B", label: "Day B", focus: "Pull + Glutes",
+      muscles: ["Back","Biceps","Legs","Core"],
+      core: {
+        early: [
+          { name: "Bird dog", sets: 2, target: "8", unit: "bodyweight", note: "each side" },
+        ],
+        late: [
+          { name: "Bird dog", sets: 3, target: "10", unit: "bodyweight", note: "each side" },
+        ],
+      },
+      main: {
+        early: [
+          { name: "Lat pulldown",                sets: 3, target: "10", unit: "lbs" },
+          { name: "Single-arm DB row",            sets: 3, target: "10", unit: "lbs", note: "each arm" },
+          { name: "Goblet squat",                 sets: 3, target: "12", unit: "lbs" },
+          { name: "Romanian deadlift (light DB)", sets: 2, target: "10", unit: "lbs", note: "light — stop if back talks" },
+        ],
+        late: [
+          { name: "Lat pulldown",                sets: 3, target: "10", unit: "lbs" },
+          { name: "Single-arm DB row",            sets: 3, target: "10", unit: "lbs", note: "each arm" },
+          { name: "Goblet squat",                 sets: 3, target: "15", unit: "lbs" },
+          { name: "Romanian deadlift (light DB)", sets: 3, target: "10", unit: "lbs", note: "light — stop if back talks" },
+        ],
+      },
+      accessories: { early: [], late: [] },
+    },
+  ],
+};
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
+function newSet()      { return { id: uid(), reps: "", weight: "", unit: "lbs" }; }
+function newExercise() { return { id: uid(), name: "", sets: [newSet()] }; }
+function newSession()  {
+  return { id: uid(), name: "", date: new Date().toISOString().split("T")[0], muscleGroups: [], exercises: [newExercise()], notes: "" };
+}
+function totalSets(w) { return w.exercises.reduce((n, e) => n + e.sets.length, 0); }
+function formatDate(s) {
+  if (!s) return "";
+  const [y, m, d] = s.split("-");
+  return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m-1]} ${+d}, ${y}`;
+}
+
+function buildSessionFromPlan(day, phase) {
+  const makeEx = ex => ({
+    id: uid(), name: ex.name,
+    sets: Array.from({ length: ex.sets }, () => ({ id: uid(), reps: ex.target || "", weight: "", unit: ex.unit || "lbs" })),
+  });
+  const exercises = [
+    ...PREHAB.map(makeEx),
+    ...day.core[phase].map(makeEx),
+    ...day.main[phase].map(makeEx),
+    ...(day.accessories[phase] || []).map(makeEx),
+  ];
+  return { id: uid(), name: `${day.label} — ${day.focus}`, date: new Date().toISOString().split("T")[0], muscleGroups: day.muscles, notes: "", exercises };
+}
+
+// ─── Log view components ──────────────────────────────────────────────────────
+function SetRow({ set, exId, onUpdate, onRemove, canRemove }) {
+  return (
+    <div className="set-row">
+      <span className="set-num">SET</span>
+      <input className="set-input" type="number" min="0" placeholder="reps" value={set.reps} onChange={e => onUpdate(exId, set.id, "reps", e.target.value)} />
+      <span className="set-sep">×</span>
+      <input className="set-input" type="number" min="0" step="0.5" placeholder="weight" value={set.weight} onChange={e => onUpdate(exId, set.id, "weight", e.target.value)} />
+      <select className="set-select" value={set.unit} onChange={e => onUpdate(exId, set.id, "unit", e.target.value)}>
+        {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+      </select>
+      {canRemove && <button className="btn-icon" onClick={() => onRemove(exId, set.id)}>×</button>}
+    </div>
+  );
+}
+
+function ExerciseCard({ exercise, onUpdate, onRemove, onAddSet, onRemoveSet, onUpdateSet, canRemove }) {
+  return (
+    <div className="exercise-card">
+      <div className="exercise-header">
+        <input className="exercise-name-input" type="text" placeholder="Exercise name" value={exercise.name} onChange={e => onUpdate(exercise.id, "name", e.target.value)} />
+        {canRemove && <button className="btn-icon" onClick={() => onRemove(exercise.id)}>×</button>}
+      </div>
+      <div className="sets-list">
+        {exercise.sets.map(s => <SetRow key={s.id} set={s} exId={exercise.id} onUpdate={onUpdateSet} onRemove={onRemoveSet} canRemove={exercise.sets.length > 1} />)}
+      </div>
+      <button className="btn-ghost add-set-btn" onClick={() => onAddSet(exercise.id)}>+ Add Set</button>
+    </div>
+  );
+}
+
+function WorkoutCard({ workout, expanded, onToggle }) {
+  return (
+    <div className={`workout-card ${expanded ? "expanded" : ""}`}>
+      <div className="workout-card-header" onClick={onToggle}>
+        <div className="workout-card-meta">
+          <span className="workout-card-date">{formatDate(workout.date)}</span>
+          {workout.muscleGroups?.length > 0 && (
+            <div className="tag-group">{workout.muscleGroups.map(m => <span key={m} className="tag small">{m}</span>)}</div>
+          )}
+        </div>
+        <div className="workout-card-right">
+          <span className="workout-card-name">{workout.name || "Untitled"}</span>
+          <span className="workout-card-sets">{totalSets(workout)} sets</span>
+          <span className="expand-icon">{expanded ? "▲" : "▼"}</span>
+        </div>
+      </div>
+      {expanded && (
+        <div className="workout-card-body">
+          {workout.exercises.map((ex, i) => (
+            <div key={i} className="history-exercise">
+              <div className="history-exercise-name">{ex.name}</div>
+              <div className="history-sets">
+                {ex.sets.map((s, j) => (
+                  <span key={j} className="history-set">
+                    {s.reps && s.weight ? `${s.reps} × ${s.weight} ${s.unit}` : s.reps ? `${s.reps} reps` : "—"}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+          {workout.notes && <div className="history-notes"><span className="history-notes-label">Notes</span><p>{workout.notes}</p></div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlansView({ onLoadPlan }) {
+  const [activeDay, setActiveDay] = useState("A");
+  const [phase, setPhase]         = useState("early");
+  const day = PHASE1.days.find(d => d.id === activeDay);
+
+  const renderBlock = (exercises, label, mandatory = false) => {
+    if (!exercises || exercises.length === 0) return null;
+    return (
+      <div className="plan-block">
+        <div className="plan-block-label">
+          {label} {mandatory && <span className="mandatory-badge">MANDATORY</span>}
+        </div>
+        {exercises.map((ex, i) => (
+          <div key={i} className="plan-exercise-row">
+            <div className="plan-exercise-left">
+              <span className="plan-exercise-name">{ex.name}</span>
+              {ex.note && <span className="plan-exercise-note">{ex.note}</span>}
+            </div>
+            <span className="plan-exercise-target">{ex.sets}×{ex.target}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <div className="plans-view">
+      <div className="plan-header">
+        <div className="plan-title">{PHASE1.name}</div>
+        <div className="plan-subtitle">{PHASE1.subtitle}</div>
+        <div className="plan-alert">{PHASE1.note}</div>
+      </div>
+      <div className="plan-tab-row">
+        {PHASE1.days.map(d => (
+          <button key={d.id} className={`plan-tab ${activeDay === d.id ? "active" : ""}`} onClick={() => setActiveDay(d.id)}>
+            <span className="plan-tab-label">{d.label}</span>
+            <span className="plan-tab-focus">{d.focus}</span>
+          </button>
+        ))}
+      </div>
+      <div className="plan-phase-toggle">
+        <button className={`phase-btn ${phase === "early" ? "active" : ""}`} onClick={() => setPhase("early")}>Weeks 1–2</button>
+        <button className={`phase-btn ${phase === "late" ? "active" : ""}`} onClick={() => setPhase("late")}>Weeks 3–4</button>
+      </div>
+      {renderBlock(PREHAB, "Prehab Warm-Up", true)}
+      {renderBlock(day.core[phase], "Core")}
+      {renderBlock(day.main[phase], "Main Work")}
+      {renderBlock(day.accessories[phase], "Accessories")}
+      <button className="load-plan-btn" onClick={() => onLoadPlan(day, phase)}>
+        ▶ Load {day.label} into Logger
+      </button>
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+export default function App() {
+  const [view, setView]             = useState("log");
+  const [session, setSession]       = useState(newSession());
+  const [workouts, setWorkouts]     = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [saving, setSaving]         = useState(false);
+  const [toast, setToast]           = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+
+  useEffect(() => {
+    fetchWorkouts().then(setWorkouts).catch(() => showToast("Couldn't load workouts.", "error")).finally(() => setLoading(false));
+  }, []);
+
+  function showToast(msg, type = "ok") { setToast({ msg, type }); setTimeout(() => setToast(null), 3500); }
+  function updateField(key, val)    { setSession(s => ({ ...s, [key]: val })); }
+  function toggleMuscle(m) {
+    setSession(s => ({ ...s, muscleGroups: s.muscleGroups.includes(m) ? s.muscleGroups.filter(x => x !== m) : [...s.muscleGroups, m] }));
+  }
+  function addExercise()        { setSession(s => ({ ...s, exercises: [...s.exercises, newExercise()] })); }
+  function removeExercise(exId) { setSession(s => ({ ...s, exercises: s.exercises.filter(e => e.id !== exId) })); }
+  function updateExercise(exId, key, val) { setSession(s => ({ ...s, exercises: s.exercises.map(e => e.id === exId ? { ...e, [key]: val } : e) })); }
+  function addSet(exId) { setSession(s => ({ ...s, exercises: s.exercises.map(e => e.id === exId ? { ...e, sets: [...e.sets, newSet()] } : e) })); }
+  function removeSet(exId, setId) { setSession(s => ({ ...s, exercises: s.exercises.map(e => e.id === exId ? { ...e, sets: e.sets.filter(st => st.id !== setId) } : e) })); }
+  function updateSet(exId, setId, key, val) { setSession(s => ({ ...s, exercises: s.exercises.map(e => e.id === exId ? { ...e, sets: e.sets.map(st => st.id === setId ? { ...st, [key]: val } : st) } : e) })); }
+
+  function handleLoadPlan(day, phase) { setSession(buildSessionFromPlan(day, phase)); setView("log"); showToast(`${day.label} loaded — fill in your weights and go.`); }
+
+  async function handleStop() {
+    if (!session.name.trim()) { showToast("Name this session before finishing.", "error"); return; }
+    const namedExercises = session.exercises.filter(e => e.name.trim());
+    if (!namedExercises.length) { showToast("Log at least one exercise.", "error"); return; }
+    setSaving(true);
+    try {
+      const saved = await saveWorkout({ ...session, exercises: namedExercises });
+      setWorkouts(w => [saved, ...w]);
+      setSession(newSession());
+      showToast("Session saved ✓");
+    } catch (err) { showToast(`Save failed: ${err.message}`, "error"); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div className="app">
+      <header className="header">
+        <div className="header-logo"><span className="logo-iron">IRON</span><span className="logo-log">LOG</span></div>
+        <nav className="header-nav">
+          <button className={`nav-btn ${view === "log" ? "active" : ""}`} onClick={() => setView("log")}>Log</button>
+          <button className={`nav-btn ${view === "plans" ? "active" : ""}`} onClick={() => setView("plans")}>Plans</button>
+          <button className={`nav-btn ${view === "history" ? "active" : ""}`} onClick={() => setView("history")}>
+            History {workouts.length > 0 && <span className="nav-badge">{workouts.length}</span>}
+          </button>
+        </nav>
+      </header>
+      <main className="main">
+        {view === "log" && (
+          <div className="log-view">
+            <div className="section">
+              <input className="session-name-input" type="text" placeholder="Session name (e.g. Push Day)" value={session.name} onChange={e => updateField("name", e.target.value)} />
+              <input className="date-input" type="date" value={session.date} onChange={e => updateField("date", e.target.value)} />
+            </div>
+            <div className="section">
+              <div className="section-label">Muscle Groups</div>
+              <div className="tag-group">
+                {MUSCLE_GROUPS.map(m => <button key={m} className={`tag ${session.muscleGroups.includes(m) ? "active" : ""}`} onClick={() => toggleMuscle(m)}>{m}</button>)}
+              </div>
+            </div>
+            <div className="section">
+              <div className="section-label">Exercises</div>
+              {session.exercises.map(ex => (
+                <ExerciseCard key={ex.id} exercise={ex} canRemove={session.exercises.length > 1}
+                  onUpdate={updateExercise} onRemove={removeExercise}
+                  onAddSet={addSet} onRemoveSet={removeSet} onUpdateSet={updateSet} />
+              ))}
+              <button className="btn-ghost add-exercise-btn" onClick={addExercise}>+ Add Exercise</button>
+            </div>
+            <div className="section">
+              <div className="section-label">Notes</div>
+              <textarea className="notes-input" rows={3} placeholder="How did it go? PRs, fatigue, notes..." value={session.notes} onChange={e => updateField("notes", e.target.value)} />
+            </div>
+            <button className={`stop-btn ${saving ? "loading" : ""}`} onClick={handleStop} disabled={saving}>
+              {saving ? "Saving…" : "⬛ STOP WORKOUT"}
+            </button>
+          </div>
+        )}
+        {view === "plans" && <PlansView onLoadPlan={handleLoadPlan} />}
+        {view === "history" && (
+          <div className="history-view">
+            {loading ? (
+              <div className="empty-state"><div className="spinner" /><p>Loading your history…</p></div>
+            ) : workouts.length === 0 ? (
+              <div className="empty-state"><p className="empty-title">No sessions yet.</p><p className="empty-sub">Log your first workout and it'll show up here.</p></div>
+            ) : (
+              workouts.map(w => <WorkoutCard key={w.id} workout={w} expanded={expandedId === w.id} onToggle={() => setExpandedId(expandedId === w.id ? null : w.id)} />)
+            )}
+          </div>
+        )}
+      </main>
+      {toast && <div className={`toast ${toast.type}`}>{toast.msg}</div>}
+    </div>
+  );
+}
