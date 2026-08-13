@@ -129,6 +129,12 @@ html, body { background: var(--bg); color: var(--text); font-family: var(--font-
   padding: 4px 8px; transition: all 0.12s; flex-shrink: 0;
 }
 .btn-done:hover { background: #1a3000; }
+.btn-done.checked { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.btn-done.checked:hover { background: var(--accent-dim); }
+
+/* ─── completed set row ──────────────────────────────────────────────────────*/
+.set-row.done { opacity: 0.55; }
+.set-row.done .set-input, .set-row.done .set-select { cursor: not-allowed; }
 
 /* ─── youtube links in plans ─────────────────────────────────────────────────*/
 .plan-exercise-name {
