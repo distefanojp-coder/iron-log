@@ -80,7 +80,7 @@ const PHASE1 = {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2); }
-function newSet()      { return { id: uid(), reps: "", weight: "", unit: "lbs" }; }
+function newSet()      { return { id: uid(), reps: "", weight: "", unit: "lbs", done: false }; }
 function newExercise() { return { id: uid(), name: "", sets: [newSet()] }; }
 function newSession()  {
   return { id: uid(), name: "", date: new Date().toISOString().split("T")[0], muscleGroups: [], exercises: [newExercise()], notes: "" };
@@ -94,12 +94,40 @@ function formatDate(s) {
 function youtubeUrl(name) {
   return `https://www.youtube.com/results?search_query=how+to+${encodeURIComponent(name)}+exercise+form`;
 }
-function buildSessionFromPlan(day, phase) {
-  const makeEx = ex => ({
-    id: uid(), name: ex.name,
-    sets: Array.from({ length: ex.sets }, () => ({ id: uid(), reps: ex.target || "", weight: "", unit: ex.unit || "lbs" })),
-    restType: ex.rest || "default",
-  });
+// PYRAMID_STEP: lbs added per set when ramping. This is a convention (ramp into
+// working weight), not an evidence-backed number — tune it to whatever feels right.
+const PYRAMID_STEP = 5;
+
+function roundToHalf(n) { return Math.round(n * 2) / 2; }
+
+// Finds the most recent past session with a matching exercise name and returns
+// its logged weights in set order. Returns null if nothing usable is found —
+// never guess a starting weight from nothing.
+function getLastWeights(workouts, name) {
+  const target = (name || "").trim().toLowerCase();
+  if (!target) return null;
+  for (const w of workouts) { // API returns newest-first
+    const match = w.exercises?.find(e => e.name?.trim().toLowerCase() === target);
+    if (match) {
+      const weights = match.sets.map(s => parseFloat(s.weight)).filter(n => !isNaN(n) && n > 0);
+      if (weights.length) return weights;
+    }
+  }
+  return null;
+}
+
+function buildSessionFromPlan(day, phase, workouts = []) {
+  const makeEx = ex => {
+    const lastWeights = getLastWeights(workouts, ex.name);
+    const sets = Array.from({ length: ex.sets }, (_, i) => {
+      let weight = "";
+      if (lastWeights) {
+        weight = String(roundToHalf(lastWeights[0] + 5 + PYRAMID_STEP * i));
+      }
+      return { id: uid(), reps: ex.target || "", weight, unit: ex.unit || "lbs", done: false };
+    });
+    return { id: uid(), name: ex.name, sets, restType: ex.rest || "default" };
+  };
   return {
     id: uid(), name: `${day.label} — ${day.focus}`,
     date: new Date().toISOString().split("T")[0],
@@ -149,15 +177,15 @@ function RestTimer({ seconds, onDismiss }) {
 // ─── Log view components ──────────────────────────────────────────────────────
 function SetRow({ set, exId, onUpdate, onRemove, onLogSet, canRemove }) {
   return (
-    <div className="set-row">
+    <div className={`set-row ${set.done ? "done" : ""}`}>
       <span className="set-num">SET</span>
-      <input className="set-input" type="number" min="0" placeholder="reps" value={set.reps} onChange={e => onUpdate(exId, set.id, "reps", e.target.value)} />
+      <input className="set-input" type="number" min="0" placeholder="reps" value={set.reps} disabled={set.done} onChange={e => onUpdate(exId, set.id, "reps", e.target.value)} />
       <span className="set-sep">×</span>
-      <input className="set-input" type="number" min="0" step="0.5" placeholder="weight" value={set.weight} onChange={e => onUpdate(exId, set.id, "weight", e.target.value)} />
-      <select className="set-select" value={set.unit} onChange={e => onUpdate(exId, set.id, "unit", e.target.value)}>
+      <input className="set-input" type="number" min="0" step="0.5" placeholder="weight" value={set.weight} disabled={set.done} onChange={e => onUpdate(exId, set.id, "weight", e.target.value)} />
+      <select className="set-select" value={set.unit} disabled={set.done} onChange={e => onUpdate(exId, set.id, "unit", e.target.value)}>
         {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
       </select>
-      <button className="btn-done" onClick={() => onLogSet(exId)} title="Done — start rest timer">✓</button>
+      <button className={`btn-done ${set.done ? "checked" : ""}`} onClick={() => onLogSet(exId, set.id)} title={set.done ? "Tap to undo" : "Done — start rest timer"}>✓</button>
       {canRemove && <button className="btn-icon" onClick={() => onRemove(exId, set.id)}>×</button>}
     </div>
   );
@@ -311,14 +339,20 @@ export default function App() {
   function removeSet(exId, setId) { setSession(s => ({ ...s, exercises: s.exercises.map(e => e.id === exId ? { ...e, sets: e.sets.filter(st => st.id !== setId) } : e) })); }
   function updateSet(exId, setId, key, val) { setSession(s => ({ ...s, exercises: s.exercises.map(e => e.id === exId ? { ...e, sets: e.sets.map(st => st.id === setId ? { ...st, [key]: val } : st) } : e) })); }
 
-  function handleLogSet(exId) {
+  function handleLogSet(exId, setId) {
     const ex = session.exercises.find(e => e.id === exId);
-    const restType = ex?.restType || "default";
-    const secs = REST_TIMES[restType] || REST_TIMES.default;
-    setRestTimer({ seconds: secs });
+    const set = ex?.sets.find(s => s.id === setId);
+    if (!set) return;
+    const nowDone = !set.done;
+    updateSet(exId, setId, "done", nowDone);
+    if (nowDone) {
+      const restType = ex?.restType || "default";
+      const secs = REST_TIMES[restType] || REST_TIMES.default;
+      setRestTimer({ seconds: secs });
+    }
   }
 
-  function handleLoadPlan(day, phase) { setSession(buildSessionFromPlan(day, phase)); setView("log"); showToast(`${day.label} loaded — fill in your weights and go.`); }
+  function handleLoadPlan(day, phase) { setSession(buildSessionFromPlan(day, phase, workouts)); setView("log"); showToast(`${day.label} loaded — weights prefilled from last time.`); }
 
   async function handleStop() {
     if (!session.name.trim()) { showToast("Name this session before finishing.", "error"); return; }
