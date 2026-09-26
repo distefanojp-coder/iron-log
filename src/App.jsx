@@ -18,7 +18,7 @@ const PREHAB = [
 
 const PHASE1 = {
   name: "Phase 1 — Return to Training",
-  subtitle: "20–25 min · Push / Pull · A/B Split",
+  subtitle: "20–25 min · Push / Pull / Legs · A/B/C Split",
   note: "Prehab warm-up is mandatory every session — shoulder health before any pressing or pulling.",
   days: [
     {
@@ -75,6 +75,29 @@ const PHASE1 = {
       },
       accessories: { early: [], late: [] },
     },
+    {
+      id: "C", label: "Day C", focus: "Legs + Carries",
+      muscles: ["Legs","Core"],
+      core: { early: [], late: [] }, // carries cover trunk work on this day
+      main: {
+        early: [
+          { name: "Rear-foot-elevated split squat", sets: 3, target: "8",  unit: "lbs", note: "each leg · DB each hand · rear foot on bench", rest: "main" },
+          { name: "Romanian deadlift (light DB)",   sets: 3, target: "10", unit: "lbs", note: "light — 3-sec lowering", rest: "main" },
+        ],
+        late: [
+          { name: "Rear-foot-elevated split squat", sets: 3, target: "10", unit: "lbs", note: "each leg · add weight once 10 is clean", rest: "main" },
+          { name: "Romanian deadlift (light DB)",   sets: 3, target: "10", unit: "lbs", note: "light — 3-sec lowering", rest: "main" },
+        ],
+      },
+      accessories: {
+        early: [
+          { name: "Farmer carry", sets: 3, target: "50", unit: "lbs", note: "~50 ft · weight is per hand · grip is the limiter", rest: "accessories", maxWeight: 52.5 },
+        ],
+        late: [
+          { name: "Farmer carry", sets: 4, target: "60", unit: "lbs", note: "~60 ft · add distance before weight", rest: "accessories", maxWeight: 52.5 },
+        ],
+      },
+    },
   ],
 };
 
@@ -122,7 +145,9 @@ function buildSessionFromPlan(day, phase, workouts = []) {
     const sets = Array.from({ length: ex.sets }, (_, i) => {
       let weight = "";
       if (lastWeights) {
-        weight = String(roundToHalf(lastWeights[0] + 5 + PYRAMID_STEP * i));
+        let w = roundToHalf(lastWeights[0] + 5 + PYRAMID_STEP * i);
+        if (ex.maxWeight) w = Math.min(w, ex.maxWeight); // e.g. SelectTech tops out at 52.5
+        weight = String(w);
       }
       return { id: uid(), reps: ex.target || "", weight, unit: ex.unit || "lbs", done: false };
     });
